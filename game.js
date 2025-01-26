@@ -4,41 +4,41 @@ import { PongGame } from './pong-game.js';
 class GameController {
   constructor() {
     this.game = new PongGame();
-    this.setupTrackers();
+    this.currentPlayer = 1;
+    this.usingFrontCamera = true;
+    this.setupTracker();
+    this.setupCameraSwitch();
   }
 
-  async setupTrackers() {
+  async setupTracker() {
     try {
-      this.frontTracker = new HandTracker('front-camera', 'front-overlay');
-      this.backTracker = new HandTracker('back-camera', 'back-overlay');
-      
-      await Promise.all([
-        this.frontTracker.initialize().catch(error => {
-          console.error('Front camera initialization failed:', error);
-          throw error;
-        }),
-        this.backTracker.initialize().catch(error => {
-          console.error('Back camera initialization failed:', error);
-          throw error;
-        })
-      ]);
+      this.tracker = new HandTracker('camera', 'camera-overlay');
+      await this.tracker.initialize(this.usingFrontCamera);
 
-      this.frontTracker.onHandUpdate((landmarks) => {
+      this.tracker.onHandUpdate((landmarks) => {
         const y = landmarks[9].y; // Palm position
-        this.game.updatePlayerPosition(1, y);
-      });
-
-      this.backTracker.onHandUpdate((landmarks) => {
-        const y = landmarks[9].y;
-        this.game.updatePlayerPosition(2, y);
+        this.game.updatePlayerPosition(this.currentPlayer, y);
       });
 
       this.game.start();
     } catch (error) {
       console.error('Game initialization failed:', error);
-      // Game will still start, but with fallback controls
       this.game.start();
     }
+  }
+
+  setupCameraSwitch() {
+    const switchBtn = document.getElementById('switch-camera');
+    switchBtn.addEventListener('click', async () => {
+      this.usingFrontCamera = !this.usingFrontCamera;
+      this.currentPlayer = this.currentPlayer === 1 ? 2 : 1;
+      
+      try {
+        await this.tracker.switchCamera(this.usingFrontCamera);
+      } catch (error) {
+        console.error('Failed to switch camera:', error);
+      }
+    });
   }
 }
 

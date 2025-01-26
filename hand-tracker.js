@@ -4,6 +4,7 @@ export class HandTracker {
     this.canvas = document.getElementById(canvasId);
     this.ctx = this.canvas.getContext('2d');
     this.updateCallback = null;
+    this.camera = null;
     
     this.hands = new Hands({
       locateFile: (file) => {
@@ -19,7 +20,7 @@ export class HandTracker {
     });
   }
 
-  async initialize() {
+  async initialize(useFrontCamera = true) {
     try {
       this.hands.onResults((results) => {
         this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
@@ -32,7 +33,6 @@ export class HandTracker {
         }
       });
 
-      // Set canvas size to match video
       const resizeCanvas = () => {
         this.canvas.width = this.video.clientWidth;
         this.canvas.height = this.video.clientHeight;
@@ -40,53 +40,68 @@ export class HandTracker {
       resizeCanvas();
       window.addEventListener('resize', resizeCanvas);
 
-      const constraints = {
-        video: {
-          facingMode: this.video.id === 'front-camera' ? 'user' : 'environment',
-          width: { ideal: 480 },
-          height: { ideal: 360 }
-        }
-      };
-
-      const stream = await navigator.mediaDevices.getUserMedia(constraints).catch(error => {
-        console.error('Camera access error:', error);
-        throw new Error(`Failed to access ${this.video.id}: ${error.message}`);
-      });
-
-      this.video.srcObject = stream;
-      await new Promise((resolve, reject) => {
-        this.video.onloadedmetadata = resolve;
-        this.video.onerror = reject;
-      });
-
-      await this.video.play().catch(error => {
-        console.error('Video playback error:', error);
-        throw new Error(`Failed to play video: ${error.message}`);
-      });
-
-      const camera = new Camera(this.video, {
-        onFrame: async () => {
-          await this.hands.send({image: this.video}).catch(console.error);
-        },
-        width: 480,
-        height: 360
-      });
-      
-      camera.start();
+      await this.startCamera(useFrontCamera);
     } catch (error) {
       console.error('HandTracker initialization failed:', error);
       this.handleError(error);
     }
   }
 
+  async startCamera(useFrontCamera) {
+    // Stop any existing stream
+    if (this.video.srcObject) {
+      const tracks = this.video.srcObject.getTracks();
+      tracks.forEach(track => track.stop());
+    }
+
+    const constraints = {
+      video: {
+        facingMode: useFrontCamera ? 'user' : 'environment',
+        width: { ideal: 480 },
+        height: { ideal: 360 }
+      }
+    };
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia(constraints);
+      this.video.srcObject = stream;
+      
+      await new Promise((resolve) => {
+        this.video.onloadedmetadata = resolve;
+      });
+      
+      await this.video.play();
+
+      // Stop existing camera if it exists
+      if (this.camera) {
+        this.camera.stop();
+      }
+
+      // Create new camera instance
+      this.camera = new Camera(this.video, {
+        onFrame: async () => {
+          await this.hands.send({image: this.video});
+        },
+        width: 480,
+        height: 360
+      });
+      
+      this.camera.start();
+    } catch (error) {
+      console.error('Camera start error:', error);
+      throw error;
+    }
+  }
+
+  async switchCamera(useFrontCamera) {
+    await this.startCamera(useFrontCamera);
+  }
+
   handleError(error) {
-    // Add error message to the canvas
     this.ctx.fillStyle = 'red';
     this.ctx.font = '16px Arial';
     this.ctx.textAlign = 'center';
     this.ctx.fillText(`Camera Error: ${error.message}`, this.canvas.width/2, this.canvas.height/2);
-    
-    // Provide fallback behavior - use mouse/touch for control
     this.setupFallbackControls();
   }
 
@@ -101,12 +116,10 @@ export class HandTracker {
         y = event.clientY / window.innerHeight;
       }
       
-      // Create fake landmarks array with just the palm position
       const fakeLandmarks = Array(21).fill().map(() => ({x: 0.5, y}));
       this.updateCallback(fakeLandmarks);
     };
 
-    // Add touch and mouse controls
     this.canvas.addEventListener('touchmove', updatePosition);
     this.canvas.addEventListener('mousemove', updatePosition);
   }
