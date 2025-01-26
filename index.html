@@ -1,7 +1,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <title>AR Ping Pong</title>
   <link rel="stylesheet" href="styles.css">
   <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1646424915/hands.js"></script>
@@ -11,8 +11,8 @@
 <body>
   <div id="game-container">
     <div id="camera-container">
-      <video id="front-camera" playsinline></video>
-      <video id="back-camera" playsinline></video>
+      <video id="front-camera" playsinline autoplay muted></video>
+      <video id="back-camera" playsinline autoplay muted></video>
       <canvas id="front-overlay"></canvas>
       <canvas id="back-overlay"></canvas>
     </div>
