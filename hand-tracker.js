@@ -3,10 +3,19 @@ export class HandTracker {
     this.video = document.getElementById(videoId);
     this.canvas = document.getElementById(canvasId);
     this.ctx = this.canvas.getContext('2d');
-    this.updateCallback = null;
-    this.camera = null;
-    this.retryAttempts = 0;
-    this.maxRetries = 3;
+    this.updateCallbacks = {
+      front: null,
+      back: null
+    };
+    this.cameras = {
+      front: null,
+      back: null
+    };
+    this.streams = {
+      front: null,
+      back: null
+    };
+    this.currentCamera = 'front';
     
     this.hands = new Hands({
       locateFile: (file) => {
@@ -20,17 +29,21 @@ export class HandTracker {
       minDetectionConfidence: 0.5,
       minTrackingConfidence: 0.5
     });
+
+    // Frame switching
+    this.frameCount = 0;
+    this.switchEveryNFrames = 2;
   }
 
-  async initialize(useFrontCamera = true) {
+  async initialize() {
     try {
       this.hands.onResults((results) => {
         this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
         if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
           const landmarks = results.multiHandLandmarks[0];
           this.drawHand(landmarks);
-          if (this.updateCallback) {
-            this.updateCallback(landmarks);
+          if (this.updateCallbacks[this.currentCamera]) {
+            this.updateCallbacks[this.currentCamera](landmarks);
           }
         }
       });
@@ -42,126 +55,92 @@ export class HandTracker {
       resizeCanvas();
       window.addEventListener('resize', resizeCanvas);
 
-      await this.startCamera(useFrontCamera);
+      // Initialize both cameras
+      await this.initializeCameras();
     } catch (error) {
       console.error('HandTracker initialization failed:', error);
       this.handleError(error);
     }
   }
 
-  async startCamera(useFrontCamera) {
-    if (this.video.srcObject) {
-      const tracks = this.video.srcObject.getTracks();
-      tracks.forEach(track => track.stop());
-    }
+  async initializeCameras() {
+    // Initialize front camera
+    this.streams.front = await this.getCameraStream(true);
+    // Initialize back camera
+    this.streams.back = await this.getCameraStream(false);
 
+    // Set initial video source
+    this.video.srcObject = this.streams.front;
+    await this.video.play();
+
+    // Setup camera processor
+    const cameraProcessor = new Camera(this.video, {
+      onFrame: async () => {
+        try {
+          this.frameCount++;
+          if (this.frameCount % this.switchEveryNFrames === 0) {
+            // Switch between cameras
+            this.currentCamera = this.currentCamera === 'front' ? 'back' : 'front';
+            this.video.srcObject = this.streams[this.currentCamera];
+          }
+          await this.hands.send({image: this.video});
+        } catch (error) {
+          console.warn('Frame processing error:', error);
+        }
+      },
+      width: 480,
+      height: 360
+    });
+    
+    cameraProcessor.start();
+  }
+
+  async getCameraStream(isFrontCamera) {
     const constraints = {
       video: {
-        facingMode: useFrontCamera ? "user" : "environment",
+        facingMode: isFrontCamera ? "user" : "environment",
         width: { ideal: 480 },
         height: { ideal: 360 }
       }
     };
 
     try {
-      // Check if mediaDevices is supported
-      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-        throw new Error('MediaDevices API not supported');
-      }
-
-      // Get list of available cameras
-      const devices = await navigator.mediaDevices.enumerateDevices();
-      const videoDevices = devices.filter(device => device.kind === 'videoinput');
-
-      if (videoDevices.length === 0) {
-        throw new Error('No video devices found');
-      }
-
-      const stream = await navigator.mediaDevices.getUserMedia(constraints);
-      this.video.srcObject = stream;
-      
-      await new Promise((resolve, reject) => {
-        this.video.onloadedmetadata = resolve;
-        this.video.onerror = reject;
-        // Add timeout to prevent hanging
-        setTimeout(reject, 5000, new Error('Video load timeout'));
-      });
-      
-      await this.video.play();
-
-      if (this.camera) {
-        this.camera.stop();
-      }
-
-      this.camera = new Camera(this.video, {
-        onFrame: async () => {
-          try {
-            await this.hands.send({image: this.video});
-          } catch (error) {
-            console.warn('Frame processing error:', error);
-          }
-        },
-        width: 480,
-        height: 360
-      });
-      
-      this.camera.start();
-      this.retryAttempts = 0; // Reset retry counter on successful start
+      return await navigator.mediaDevices.getUserMedia(constraints);
     } catch (error) {
-      console.error('Camera start error:', error);
-      if (this.retryAttempts < this.maxRetries) {
-        this.retryAttempts++;
-        console.log(`Retrying camera start (attempt ${this.retryAttempts})`);
-        await new Promise(resolve => setTimeout(resolve, 1000)); // Wait 1 second before retry
-        return this.startCamera(useFrontCamera);
-      }
-      throw error;
+      console.error(`Failed to get ${isFrontCamera ? 'front' : 'back'} camera:`, error);
+      this.handleError(error);
+      return null;
     }
   }
 
-  async switchCamera(useFrontCamera) {
-    try {
-      await this.startCamera(useFrontCamera);
-    } catch (error) {
-      console.error('Camera switch failed:', error);
-      this.handleError(error);
-    }
+  onHandUpdate(callback, camera) {
+    this.updateCallbacks[camera] = callback;
   }
 
   handleError(error) {
     console.error('Camera error:', error);
-    this.ctx.fillStyle = 'rgba(255, 0, 0, 0.5)';
-    this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
-    this.ctx.fillStyle = 'white';
-    this.ctx.font = '16px Arial';
-    this.ctx.textAlign = 'center';
-    this.ctx.fillText(`Camera Error: ${error.message}`, this.canvas.width/2, this.canvas.height/2);
-    this.ctx.fillText('Using touch/mouse controls instead', this.canvas.width/2, this.canvas.height/2 + 30);
     this.setupFallbackControls();
   }
 
   setupFallbackControls() {
     const updatePosition = (event) => {
-      if (!this.updateCallback) return;
+      event.preventDefault();
       
       let y;
       if (event.type.startsWith('touch')) {
-        event.preventDefault();
         y = event.touches[0].clientY / window.innerHeight;
       } else {
         y = event.clientY / window.innerHeight;
       }
       
       const fakeLandmarks = Array(21).fill().map(() => ({x: 0.5, y}));
-      this.updateCallback(fakeLandmarks);
+      Object.values(this.updateCallbacks).forEach(callback => {
+        if (callback) callback(fakeLandmarks);
+      });
     };
 
     this.canvas.addEventListener('touchmove', updatePosition, { passive: false });
     this.canvas.addEventListener('mousemove', updatePosition);
-  }
-
-  onHandUpdate(callback) {
-    this.updateCallback = callback;
   }
 
   drawHand(landmarks) {
