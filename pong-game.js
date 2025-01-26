@@ -10,8 +10,8 @@ export class PongGame {
     this.ball = {
       x: this.canvas.width / 2,
       y: this.canvas.height / 2,
-      dx: 5,
-      dy: 5
+      dx: 7,
+      dy: 7
     };
     
     this.players = {
@@ -23,6 +23,9 @@ export class PongGame {
       1: 0,
       2: 0
     };
+
+    this.lastFrameTime = 0;
+    this.deltaTime = 0;
 
     // Set canvas size
     this.resize();
@@ -42,16 +45,20 @@ export class PongGame {
     this.players[player].y = y * this.canvas.height;
   }
 
-  gameLoop() {
+  gameLoop(timestamp) {
+    // Calculate delta time for smooth animations
+    this.deltaTime = (timestamp - this.lastFrameTime) / 16.67; // 60 FPS baseline
+    this.lastFrameTime = timestamp;
+    
     this.update();
     this.draw();
-    requestAnimationFrame(() => this.gameLoop());
+    requestAnimationFrame((timestamp) => this.gameLoop(timestamp));
   }
 
   update() {
-    // Update ball position
-    this.ball.x += this.ball.dx;
-    this.ball.y += this.ball.dy;
+    // Update ball position with delta time
+    this.ball.x += this.ball.dx * this.deltaTime;
+    this.ball.y += this.ball.dy * this.deltaTime;
 
     // Ball collision with top and bottom
     if (this.ball.y <= 0 || this.ball.y >= this.canvas.height) {
@@ -85,8 +92,8 @@ export class PongGame {
   resetBall() {
     this.ball.x = this.canvas.width / 2;
     this.ball.y = this.canvas.height / 2;
-    this.ball.dx = (Math.random() > 0.5 ? 1 : -1) * 5;
-    this.ball.dy = (Math.random() * 2 - 1) * 5;
+    this.ball.dx = (Math.random() > 0.5 ? 1 : -1) * 7;
+    this.ball.dy = (Math.random() * 2 - 1) * 7;
   }
 
   draw() {
