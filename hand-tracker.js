@@ -10,6 +10,10 @@ export class HandTracker {
     
     this.currentCamera = 'front';
     this.lastProcessedCamera = 'front';
+    this.lastFrameData = {
+      front: null,
+      back: null
+    };
     
     this.hands = new Hands({
       locateFile: (file) => {
@@ -26,6 +30,7 @@ export class HandTracker {
 
     this.isProcessing = false;
     this.currentStream = null;
+    this.processingQueue = [];
   }
 
   async initialize() {
@@ -36,9 +41,18 @@ export class HandTracker {
           const landmarks = results.multiHandLandmarks[0];
           this.drawHand(landmarks);
           
+          // Store the last valid frame data
+          this.lastFrameData[this.lastProcessedCamera] = landmarks;
+          
           const callback = this.updateCallbacks[this.lastProcessedCamera];
           if (callback) {
             callback(landmarks);
+          }
+        } else if (this.lastFrameData[this.lastProcessedCamera]) {
+          // Use last known position if no new landmarks detected
+          const callback = this.updateCallbacks[this.lastProcessedCamera];
+          if (callback) {
+            callback(this.lastFrameData[this.lastProcessedCamera]);
           }
         }
       });
@@ -63,34 +77,42 @@ export class HandTracker {
       this.video.srcObject = stream;
       await this.video.play();
 
-      const camera = new Camera(this.video, {
-        onFrame: async () => {
-          if (this.isProcessing) return;
+      // Process frames with a small delay to allow camera switching
+      const processFrame = async () => {
+        if (this.isProcessing) {
+          requestAnimationFrame(processFrame);
+          return;
+        }
+        
+        try {
+          this.isProcessing = true;
           
-          try {
-            this.isProcessing = true;
-            
-            const facingMode = this.currentCamera === 'front' ? 'user' : 'environment';
-            const stream = await this.getCameraStream(this.currentCamera === 'front');
+          // Switch camera
+          const isFrontCamera = this.currentCamera === 'front';
+          const stream = await this.getCameraStream(!isFrontCamera);
+          if (stream) {
             this.video.srcObject = stream;
-            
-            await this.hands.send({image: this.video});
-            
-            this.lastProcessedCamera = this.currentCamera;
-            
-            this.currentCamera = this.currentCamera === 'front' ? 'back' : 'front';
-            
-            this.isProcessing = false;
-          } catch (error) {
-            console.warn('Frame processing error:', error);
-            this.isProcessing = false;
+            // Wait a bit for the camera to settle
+            await new Promise(resolve => setTimeout(resolve, 100));
           }
-        },
-        width: 480,
-        height: 360
-      });
+          
+          // Process frame
+          await this.hands.send({image: this.video});
+          
+          this.lastProcessedCamera = this.currentCamera;
+          this.currentCamera = isFrontCamera ? 'back' : 'front';
+          
+          this.isProcessing = false;
+        } catch (error) {
+          console.warn('Frame processing error:', error);
+          this.isProcessing = false;
+        }
+        
+        // Continue processing frames
+        requestAnimationFrame(processFrame);
+      };
       
-      camera.start();
+      processFrame();
     } catch (error) {
       console.error('Camera initialization failed:', error);
       this.handleError(error);
@@ -114,7 +136,7 @@ export class HandTracker {
       return this.currentStream;
     } catch (error) {
       console.error(`Failed to get ${isFrontCamera ? 'front' : 'back'} camera:`, error);
-      this.handleError(error);
+      // Don't throw error, just return null and use last known position
       return null;
     }
   }
