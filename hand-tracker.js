@@ -7,15 +7,9 @@ export class HandTracker {
       front: null,
       back: null
     };
-    this.cameras = {
-      front: null,
-      back: null
-    };
-    this.streams = {
-      front: null,
-      back: null
-    };
+    
     this.currentCamera = 'front';
+    this.lastProcessedCamera = 'front';
     
     this.hands = new Hands({
       locateFile: (file) => {
@@ -25,14 +19,13 @@ export class HandTracker {
     
     this.hands.setOptions({
       maxNumHands: 1,
-      modelComplexity: 1,
+      modelComplexity: 0, 
       minDetectionConfidence: 0.5,
       minTrackingConfidence: 0.5
     });
 
-    // Frame switching
-    this.frameCount = 0;
-    this.switchEveryNFrames = 2;
+    this.isProcessing = false;
+    this.currentStream = null;
   }
 
   async initialize() {
@@ -42,8 +35,10 @@ export class HandTracker {
         if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
           const landmarks = results.multiHandLandmarks[0];
           this.drawHand(landmarks);
-          if (this.updateCallbacks[this.currentCamera]) {
-            this.updateCallbacks[this.currentCamera](landmarks);
+          
+          const callback = this.updateCallbacks[this.lastProcessedCamera];
+          if (callback) {
+            callback(landmarks);
           }
         }
       });
@@ -55,44 +50,51 @@ export class HandTracker {
       resizeCanvas();
       window.addEventListener('resize', resizeCanvas);
 
-      // Initialize both cameras
-      await this.initializeCameras();
+      await this.initializeCamera();
     } catch (error) {
       console.error('HandTracker initialization failed:', error);
       this.handleError(error);
     }
   }
 
-  async initializeCameras() {
-    // Initialize front camera
-    this.streams.front = await this.getCameraStream(true);
-    // Initialize back camera
-    this.streams.back = await this.getCameraStream(false);
+  async initializeCamera() {
+    try {
+      const stream = await this.getCameraStream(true); 
+      this.video.srcObject = stream;
+      await this.video.play();
 
-    // Set initial video source
-    this.video.srcObject = this.streams.front;
-    await this.video.play();
-
-    // Setup camera processor
-    const cameraProcessor = new Camera(this.video, {
-      onFrame: async () => {
-        try {
-          this.frameCount++;
-          if (this.frameCount % this.switchEveryNFrames === 0) {
-            // Switch between cameras
+      const camera = new Camera(this.video, {
+        onFrame: async () => {
+          if (this.isProcessing) return;
+          
+          try {
+            this.isProcessing = true;
+            
+            const facingMode = this.currentCamera === 'front' ? 'user' : 'environment';
+            const stream = await this.getCameraStream(this.currentCamera === 'front');
+            this.video.srcObject = stream;
+            
+            await this.hands.send({image: this.video});
+            
+            this.lastProcessedCamera = this.currentCamera;
+            
             this.currentCamera = this.currentCamera === 'front' ? 'back' : 'front';
-            this.video.srcObject = this.streams[this.currentCamera];
+            
+            this.isProcessing = false;
+          } catch (error) {
+            console.warn('Frame processing error:', error);
+            this.isProcessing = false;
           }
-          await this.hands.send({image: this.video});
-        } catch (error) {
-          console.warn('Frame processing error:', error);
-        }
-      },
-      width: 480,
-      height: 360
-    });
-    
-    cameraProcessor.start();
+        },
+        width: 480,
+        height: 360
+      });
+      
+      camera.start();
+    } catch (error) {
+      console.error('Camera initialization failed:', error);
+      this.handleError(error);
+    }
   }
 
   async getCameraStream(isFrontCamera) {
@@ -105,7 +107,11 @@ export class HandTracker {
     };
 
     try {
-      return await navigator.mediaDevices.getUserMedia(constraints);
+      if (this.currentStream) {
+        this.currentStream.getTracks().forEach(track => track.stop());
+      }
+      this.currentStream = await navigator.mediaDevices.getUserMedia(constraints);
+      return this.currentStream;
     } catch (error) {
       console.error(`Failed to get ${isFrontCamera ? 'front' : 'back'} camera:`, error);
       this.handleError(error);
@@ -148,7 +154,6 @@ export class HandTracker {
     this.ctx.strokeStyle = '#00FF00';
     this.ctx.lineWidth = 2;
 
-    // Draw connections between landmarks
     for (let i = 0; i < landmarks.length - 1; i++) {
       const current = landmarks[i];
       const next = landmarks[i + 1];
@@ -159,7 +164,6 @@ export class HandTracker {
       this.ctx.stroke();
     }
 
-    // Draw landmarks
     for (const landmark of landmarks) {
       const x = landmark.x * this.canvas.width;
       const y = landmark.y * this.canvas.height;
